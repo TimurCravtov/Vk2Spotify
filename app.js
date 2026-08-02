@@ -1,13 +1,119 @@
 // ---------------------------------------------------------------------------
-// MOCK DATA & MOCK API LAYER
-// Replace these with real Spotify Web API (PKCE) calls and real parsing of
-// the VK "Ваши данные" archive once the flow below is validated.
+// SPOTIFY AUTH — Authorization Code + PKCE (no backend / no client secret).
+// Works unchanged on http://127.0.0.1:5500 and any prod origin, as long as
+// that exact origin+path is registered as a Redirect URI in the Spotify app.
 // ---------------------------------------------------------------------------
 
-const MOCK_USER = {
-  display_name: "Тимур",
-  avatar: "https://i.scdn.co/image/ab6775700000ee85f8f2c4b5f3b3b3b3b3b3b3b",
-};
+const SPOTIFY_SCOPES = "user-read-private playlist-modify-public playlist-modify-private user-library-modify";
+const REDIRECT_URI = window.location.origin + window.location.pathname;
+
+function getClientId() {
+  return localStorage.getItem("spotify_client_id") || "";
+}
+function setClientId(id) {
+  localStorage.setItem("spotify_client_id", id);
+}
+
+function generateRandomString(length) {
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const values = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(values, (x) => possible[x % possible.length]).join("");
+}
+
+async function sha256(plain) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(plain));
+}
+
+function base64UrlEncode(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function redirectToSpotifyAuthorize() {
+  const codeVerifier = generateRandomString(64);
+  const codeChallenge = base64UrlEncode(await sha256(codeVerifier));
+  const authState = generateRandomString(16);
+
+  sessionStorage.setItem("spotify_code_verifier", codeVerifier);
+  sessionStorage.setItem("spotify_auth_state", authState);
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: getClientId(),
+    scope: SPOTIFY_SCOPES,
+    code_challenge_method: "S256",
+    code_challenge: codeChallenge,
+    redirect_uri: REDIRECT_URI,
+    state: authState,
+  });
+
+  window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+}
+
+async function exchangeCodeForToken(code) {
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: getClientId(),
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: sessionStorage.getItem("spotify_code_verifier") || "",
+    }),
+  });
+  if (!res.ok) throw new Error(`Token exchange failed (${res.status})`);
+  return res.json();
+}
+
+async function refreshAccessToken(refreshToken) {
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: getClientId(),
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!res.ok) throw new Error(`Token refresh failed (${res.status})`);
+  return res.json();
+}
+
+function storeTokens(tokenResponse) {
+  sessionStorage.setItem("spotify_access_token", tokenResponse.access_token);
+  sessionStorage.setItem("spotify_expires_at", String(Date.now() + tokenResponse.expires_in * 1000));
+  if (tokenResponse.refresh_token) {
+    sessionStorage.setItem("spotify_refresh_token", tokenResponse.refresh_token);
+  }
+}
+
+async function getValidAccessToken() {
+  const expiresAt = Number(sessionStorage.getItem("spotify_expires_at") || 0);
+  const accessToken = sessionStorage.getItem("spotify_access_token");
+  if (accessToken && Date.now() < expiresAt - 10_000) return accessToken;
+
+  const refreshToken = sessionStorage.getItem("spotify_refresh_token");
+  if (!refreshToken) return null;
+
+  const tokenResponse = await refreshAccessToken(refreshToken);
+  storeTokens(tokenResponse);
+  return tokenResponse.access_token;
+}
+
+async function fetchSpotifyProfile(accessToken) {
+  const res = await fetch("https://api.spotify.com/v1/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Failed to load profile (${res.status})`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// MOCK DATA & MOCK API LAYER (archive parsing + import — still mocked)
+// ---------------------------------------------------------------------------
 
 // Stand-in for what parsing the VK archive would produce: liked audio +
 // audio playlists, each with a track count.
@@ -19,10 +125,6 @@ const MOCK_ARCHIVE_RESULT = {
     { name: "Road trip", count: 12 },
   ],
 };
-
-function mockLogin() {
-  return new Promise((resolve) => setTimeout(() => resolve(MOCK_USER), 700));
-}
 
 // Simulates reading + parsing the uploaded VK archive file.
 function mockParseArchive(file) {
@@ -76,6 +178,13 @@ const state = {
 const el = {
   authArea: document.getElementById("auth-area"),
   connectBtn: document.getElementById("connect-btn"),
+  authError: document.getElementById("auth-error"),
+  clientIdSetup: document.getElementById("client-id-setup"),
+  redirectUriDisplay: document.getElementById("redirect-uri-display"),
+  copyRedirectBtn: document.getElementById("copy-redirect-btn"),
+  clientIdInput: document.getElementById("client-id-input"),
+  saveClientIdBtn: document.getElementById("save-client-id-btn"),
+  changeClientIdBtn: document.getElementById("change-client-id-btn"),
   archiveCard: document.getElementById("archive-card"),
   archiveInput: document.getElementById("archive-input"),
   dropzone: document.getElementById("dropzone"),
@@ -150,17 +259,121 @@ function unlock(cardEl) {
 // EVENT WIRING
 // ---------------------------------------------------------------------------
 
-el.connectBtn.addEventListener("click", async () => {
-  el.connectBtn.disabled = true;
-  el.connectBtn.textContent = "Подключение…";
+function showAuthError(msg) {
+  el.authError.textContent = msg;
+  el.authError.classList.remove("hidden");
+}
+function clearAuthError() {
+  el.authError.classList.add("hidden");
+  el.authError.textContent = "";
+}
+function resetConnectButton() {
+  el.connectBtn.disabled = false;
+  el.connectBtn.textContent = "Подключить Spotify";
+}
 
-  const user = await mockLogin();
-  state.user = user;
+function showClientIdSetup() {
+  el.clientIdInput.value = getClientId();
+  el.clientIdSetup.classList.remove("hidden");
+  el.changeClientIdBtn.classList.add("hidden");
+}
+function hideClientIdSetup() {
+  el.clientIdSetup.classList.add("hidden");
+  if (getClientId()) el.changeClientIdBtn.classList.remove("hidden");
+}
+
+function cleanUrl() {
+  window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
+}
+
+async function loadProfileAndUnlock() {
+  const accessToken = await getValidAccessToken();
+  const profile = await fetchSpotifyProfile(accessToken);
+  state.user = {
+    display_name: profile.display_name || profile.id,
+    avatar: profile.images && profile.images[0] ? profile.images[0].url : "",
+  };
   renderAuthArea();
-
   el.connectBtn.textContent = "Подключено";
+  el.connectBtn.disabled = true;
   unlock(el.archiveCard);
+}
+
+async function initAuth() {
+  el.redirectUriDisplay.value = REDIRECT_URI;
+
+  if (!getClientId()) {
+    showClientIdSetup();
+    return;
+  }
+  hideClientIdSetup();
+
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("code");
+  const returnedState = url.searchParams.get("state");
+  const authErrorParam = url.searchParams.get("error");
+
+  if (authErrorParam) {
+    cleanUrl();
+    showAuthError(`Spotify вернул ошибку: ${authErrorParam}`);
+    return;
+  }
+
+  if (code) {
+    const expectedState = sessionStorage.getItem("spotify_auth_state");
+    cleanUrl();
+    if (!returnedState || returnedState !== expectedState) {
+      showAuthError("Не удалось подтвердить запрос авторизации. Попробуйте подключиться снова.");
+      return;
+    }
+    try {
+      el.connectBtn.disabled = true;
+      el.connectBtn.textContent = "Подключение…";
+      storeTokens(await exchangeCodeForToken(code));
+      await loadProfileAndUnlock();
+    } catch (err) {
+      showAuthError("Не удалось подключить Spotify: " + err.message);
+      resetConnectButton();
+    }
+    return;
+  }
+
+  const existingToken = await getValidAccessToken().catch(() => null);
+  if (existingToken) {
+    await loadProfileAndUnlock().catch((err) => showAuthError("Сессия истекла: " + err.message));
+  }
+}
+
+el.connectBtn.addEventListener("click", () => {
+  if (!getClientId()) {
+    showClientIdSetup();
+    return;
+  }
+  clearAuthError();
+  redirectToSpotifyAuthorize();
 });
+
+el.saveClientIdBtn.addEventListener("click", () => {
+  const id = el.clientIdInput.value.trim();
+  if (!id) return;
+  setClientId(id);
+  hideClientIdSetup();
+  clearAuthError();
+});
+
+el.changeClientIdBtn.addEventListener("click", () => showClientIdSetup());
+
+el.copyRedirectBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(REDIRECT_URI);
+    el.copyRedirectBtn.textContent = "Скопировано";
+    setTimeout(() => (el.copyRedirectBtn.textContent = "Копировать"), 1500);
+  } catch {
+    el.redirectUriDisplay.select();
+  }
+});
+
+initAuth();
 
 async function handleArchiveFile(file) {
   if (!file) return;
