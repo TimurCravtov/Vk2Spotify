@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VK → Spotify Importer</title>
+<title>VK → Spotify Импорт</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -18,15 +18,15 @@
   };
 </script>
 </head>
-<body class="bg-neutral-950 text-neutral-100 min-h-screen">
+<body class="bg-neutral-950 text-neutral-100 min-h-screen flex flex-col">
 
-<div class="max-w-3xl mx-auto px-4 py-10">
+<div class="max-w-3xl mx-auto px-4 py-10 flex-1 w-full">
 
   <!-- Header -->
   <header class="flex items-center justify-between mb-10">
     <div>
       <h1 class="text-2xl font-bold tracking-tight">VK <span class="text-neutral-500">→</span> Spotify</h1>
-      <p class="text-neutral-400 text-sm mt-1">Import your VK saved audio into a Spotify playlist</p>
+      <p class="text-neutral-400 text-sm mt-1">Перенесите сохранённую музыку из ВКонтакте в Spotify</p>
     </div>
     <div id="auth-area"></div>
   </header>
@@ -35,43 +35,61 @@
   <section id="connect-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="font-semibold text-lg">1. Connect to Spotify</h2>
-        <p class="text-neutral-400 text-sm mt-1">We need permission to create a playlist and add tracks.</p>
+        <h2 class="font-semibold text-lg">1. Подключите Spotify</h2>
+        <p class="text-neutral-400 text-sm mt-1">Нужно разрешение, чтобы создавать плейлисты и добавлять треки.</p>
       </div>
       <button id="connect-btn"
-        class="flex items-center gap-2 bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full">
+        class="flex items-center gap-2 bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full whitespace-nowrap">
         <svg viewBox="0 0 24 24" class="w-5 h-5 fill-black"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.52 17.34c-.24.36-.66.48-1.02.24-2.82-1.68-6.3-2.1-10.44-1.14-.42.12-.78-.18-.9-.54-.12-.42.18-.78.54-.9 4.56-1.02 8.4-.6 11.52 1.32.42.18.48.66.3 1.02zm1.44-3.3c-.3.42-.84.6-1.26.3-3.24-1.98-8.16-2.58-11.94-1.38-.48.12-1.02-.12-1.14-.6-.12-.48.12-1.02.6-1.14 4.38-1.32 9.78-.66 13.5 1.56.36.24.54.84.24 1.26zm.12-3.42c-3.9-2.28-10.32-2.52-14.04-1.38-.6.18-1.2-.18-1.38-.72-.18-.6.18-1.2.72-1.38 4.26-1.32 11.28-1.02 15.72 1.62.54.3.72 1.02.42 1.56-.3.48-1.02.66-1.44.3z"/></svg>
-        Connect Spotify
+        Подключить Spotify
       </button>
     </div>
   </section>
 
-  <!-- Step 2: Track list -->
-  <section id="tracks-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6 opacity-40 pointer-events-none transition-opacity">
-    <div class="flex items-center justify-between mb-4">
-      <div>
-        <h2 class="font-semibold text-lg">2. Review matches</h2>
-        <p class="text-neutral-400 text-sm mt-1">Tracks found in your VK export, matched against Spotify.</p>
-      </div>
-      <span id="match-summary" class="text-sm text-neutral-400"></span>
+  <!-- Step 2: Upload VK archive -->
+  <section id="archive-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6 opacity-40 pointer-events-none transition-opacity">
+    <h2 class="font-semibold text-lg">2. Загрузите архив музыки</h2>
+    <p class="text-neutral-400 text-sm mt-1 mb-4">
+      Запросите архив своих данных ВКонтакте и загрузите его сюда.
+      <a href="https://vk.ru/data_protection?section=rules&scroll_to_archive=1" target="_blank" rel="noopener"
+        class="text-spotify hover:underline font-medium">Как получить архив →</a>
+    </p>
+
+    <input id="archive-input" type="file" accept=".zip,.html,.json" class="hidden" />
+    <div id="dropzone"
+      class="border-2 border-dashed border-neutral-700 rounded-lg p-8 text-center cursor-pointer hover:border-spotify hover:bg-neutral-800/40 transition">
+      <svg class="w-8 h-8 mx-auto mb-2 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" />
+      </svg>
+      <p class="text-sm text-neutral-300 font-medium">Перетащите файл архива сюда</p>
+      <p class="text-xs text-neutral-500 mt-1">или нажмите, чтобы выбрать файл</p>
     </div>
 
-    <div class="divide-y divide-neutral-800 rounded-lg overflow-hidden border border-neutral-800">
-      <div id="track-list"></div>
+    <div id="parse-status" class="mt-4 hidden text-sm text-neutral-400"></div>
+
+    <div class="mt-4 flex items-start gap-2 text-xs text-neutral-500 bg-neutral-800/40 border border-neutral-800 rounded-lg p-3">
+      <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 9.75h10.5a2.25 2.25 0 002.25-2.25v-5.25a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v5.25a2.25 2.25 0 002.25 2.25z" />
+      </svg>
+      <p>
+        Разработчики никогда не видят ваши данные — файл архива обрабатывается полностью локально в вашем браузере
+        и никуда не отправляется. Код открыт, можно проверить самим:
+        <a href="https://github.com/TimurCravtov/Vk2Spotify" target="_blank" rel="noopener" class="text-spotify hover:underline">GitHub</a>.
+      </p>
     </div>
   </section>
 
-  <!-- Step 3: Create playlist -->
-  <section id="playlist-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 opacity-40 pointer-events-none transition-opacity">
-    <h2 class="font-semibold text-lg mb-4">3. Create playlist</h2>
-    <div class="flex flex-col sm:flex-row gap-3">
-      <input id="playlist-name" type="text" value="VK Import"
-        class="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-spotify" />
-      <button id="create-playlist-btn"
-        class="bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full whitespace-nowrap">
-        Create playlist
-      </button>
-    </div>
+  <!-- Step 3: Import -->
+  <section id="import-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 opacity-40 pointer-events-none transition-opacity">
+    <h2 class="font-semibold text-lg mb-4">3. Импорт в Spotify</h2>
+
+    <div id="import-summary" class="space-y-3 mb-5"></div>
+
+    <button id="import-btn"
+      class="bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full">
+      Начать импорт
+    </button>
 
     <div id="progress-area" class="mt-5 hidden">
       <div class="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
@@ -80,19 +98,30 @@
       <p id="progress-label" class="text-sm text-neutral-400 mt-2"></p>
     </div>
 
-    <div id="result-area" class="mt-5 hidden">
-      <div class="bg-neutral-800/60 border border-neutral-700 rounded-lg p-4 flex items-center justify-between">
-        <div>
-          <p class="font-medium">Playlist created</p>
-          <p id="result-summary" class="text-sm text-neutral-400"></p>
-        </div>
-        <a id="result-link" href="#" target="_blank"
-          class="text-spotify text-sm font-semibold hover:underline">Open in Spotify →</a>
-      </div>
-    </div>
+    <div id="result-area" class="mt-5 hidden space-y-2"></div>
   </section>
 
 </div>
+
+<footer class="border-t border-neutral-900 mt-6">
+  <div class="max-w-3xl mx-auto px-4 py-6 flex items-center justify-between text-xs text-neutral-500">
+    <span>Vk2Spotify — некоммерческий проект с открытым исходным кодом</span>
+    <a href="https://github.com/TimurCravtov/Vk2Spotify" target="_blank" rel="noopener"
+      class="flex items-center gap-1.5 hover:text-neutral-300 transition">
+      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.207 11.387.6.113.793-.26.793-.577
+          0-.285-.01-1.04-.016-2.04-3.338.725-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.757-1.333-1.757
+          -1.089-.745.083-.729.083-.729 1.205.084 1.84 1.237 1.84 1.237 1.07 1.834 2.807 1.304 3.492.997
+          .108-.775.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.93 0-1.31.468-2.38 1.235-3.22
+          -.123-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.3 1.23A11.5 11.5 0 0112 5.803c1.02.005 2.047.138
+          3.006.404 2.29-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.233 1.91 1.233 3.22
+          0 4.61-2.807 5.624-5.48 5.92.43.372.814 1.103.814 2.222 0 1.606-.014 2.898-.014 3.293 0 .32.192.694.8.576
+          C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12z"/>
+      </svg>
+      GitHub
+    </a>
+  </div>
+</footer>
 
 <script src="app.js"></script>
 </body>

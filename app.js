@@ -1,74 +1,66 @@
 // ---------------------------------------------------------------------------
 // MOCK DATA & MOCK API LAYER
-// Replace these with real Spotify Web API (PKCE) calls and real VK export
-// parsing once the flow below is validated.
+// Replace these with real Spotify Web API (PKCE) calls and real parsing of
+// the VK "Ваши данные" archive once the flow below is validated.
 // ---------------------------------------------------------------------------
 
 const MOCK_USER = {
-  display_name: "Timur",
+  display_name: "Тимур",
   avatar: "https://i.scdn.co/image/ab6775700000ee85f8f2c4b5f3b3b3b3b3b3b3b",
 };
 
-// Stand-in for tracks parsed out of the VK "Your data" export.
-const MOCK_VK_TRACKS = [
-  { artist: "Каспийский Груз", title: "Убегай" },
-  { artist: "Скриптонит", title: "Иные" },
-  { artist: "Miyagi & Andy Panda", title: "Kosandra" },
-  { artist: "Molchat Doma", title: "Sudno (Борис Рыжий)" },
-  { artist: "Земфира", title: "Хочешь?" },
-  { artist: "OG Buda", title: "Розовое вино" },
-  { artist: "Unknown Local Rip", title: "track_final_v2 (128kbps)" },
-  { artist: "Placebo", title: "Special K" },
-];
+// Stand-in for what parsing the VK archive would produce: liked audio +
+// audio playlists, each with a track count.
+const MOCK_ARCHIVE_RESULT = {
+  likedCount: 128,
+  playlists: [
+    { name: "Chill", count: 24 },
+    { name: "Rap", count: 57 },
+    { name: "Road trip", count: 12 },
+  ],
+};
 
 function mockLogin() {
   return new Promise((resolve) => setTimeout(() => resolve(MOCK_USER), 700));
 }
 
-// Simulates searching each VK track against Spotify's search endpoint.
-// Randomly "fails" one track so the no-match UI state has something to show.
-function mockSearchTracks(vkTracks) {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const results = vkTracks.map((t, i) => {
-        const notFound = t.artist.includes("Unknown");
-        return {
-          vk: t,
-          spotify: notFound
-            ? null
-            : {
-                id: `mock_spotify_id_${i}`,
-                name: t.title,
-                artist: t.artist,
-                album_art:
-                  "https://placehold.co/64x64/1DB954/000000?text=%E2%99%AA",
-                uri: `spotify:track:mock${i}`,
-              },
-        };
-      });
-      resolve(results);
-    }, 900);
-  });
+// Simulates reading + parsing the uploaded VK archive file.
+function mockParseArchive(file) {
+  return new Promise((resolve) => setTimeout(() => resolve(MOCK_ARCHIVE_RESULT), 1100));
 }
 
-// Simulates creating a playlist and adding matched tracks, reporting progress.
-function mockCreatePlaylist(name, matches, onProgress) {
-  const toAdd = matches.filter((m) => m.spotify);
-  let added = 0;
+// Simulates creating the Liked Songs additions + each playlist on Spotify,
+// reporting progress per "stage" (liked songs bucket, then each playlist).
+function mockImport(archive, onProgress) {
+  const stages = [
+    { type: "liked", label: `Liked Songs (${archive.likedCount})` },
+    ...archive.playlists.map((p) => ({ type: "playlist", label: `${p.name} (${p.count})`, playlist: p })),
+  ];
+
+  let done = 0;
+  const results = { likedAdded: 0, playlists: [] };
+
   return new Promise((resolve) => {
     const interval = setInterval(() => {
-      added += 1;
-      onProgress(added, toAdd.length);
-      if (added >= toAdd.length) {
-        clearInterval(interval);
-        resolve({
-          playlistName: name,
-          added: toAdd.length,
-          skipped: matches.length - toAdd.length,
-          url: "https://open.spotify.com/playlist/mock_playlist_id",
+      const stage = stages[done];
+      if (stage.type === "liked") {
+        results.likedAdded = archive.likedCount;
+      } else {
+        results.playlists.push({
+          name: stage.playlist.name,
+          added: stage.playlist.count,
+          url: "https://open.spotify.com/playlist/mock_" + stage.playlist.name.toLowerCase().replace(/\s+/g, "_"),
         });
       }
-    }, 250);
+
+      done += 1;
+      onProgress(done, stages.length, stage.label);
+
+      if (done >= stages.length) {
+        clearInterval(interval);
+        resolve(results);
+      }
+    }, 600);
   });
 }
 
@@ -78,25 +70,23 @@ function mockCreatePlaylist(name, matches, onProgress) {
 
 const state = {
   user: null,
-  matches: [],
+  archive: null,
 };
 
 const el = {
   authArea: document.getElementById("auth-area"),
-  connectCard: document.getElementById("connect-card"),
   connectBtn: document.getElementById("connect-btn"),
-  tracksCard: document.getElementById("tracks-card"),
-  trackList: document.getElementById("track-list"),
-  matchSummary: document.getElementById("match-summary"),
-  playlistCard: document.getElementById("playlist-card"),
-  playlistName: document.getElementById("playlist-name"),
-  createBtn: document.getElementById("create-playlist-btn"),
+  archiveCard: document.getElementById("archive-card"),
+  archiveInput: document.getElementById("archive-input"),
+  dropzone: document.getElementById("dropzone"),
+  parseStatus: document.getElementById("parse-status"),
+  importCard: document.getElementById("import-card"),
+  importSummary: document.getElementById("import-summary"),
+  importBtn: document.getElementById("import-btn"),
   progressArea: document.getElementById("progress-area"),
   progressBar: document.getElementById("progress-bar"),
   progressLabel: document.getElementById("progress-label"),
   resultArea: document.getElementById("result-area"),
-  resultSummary: document.getElementById("result-summary"),
-  resultLink: document.getElementById("result-link"),
 };
 
 function renderAuthArea() {
@@ -113,32 +103,43 @@ function renderAuthArea() {
   `;
 }
 
-function renderTrackList() {
-  el.trackList.innerHTML = state.matches
-    .map((m) => {
-      const found = !!m.spotify;
-      return `
-        <div class="flex items-center gap-3 px-4 py-3 ${found ? "" : "opacity-60"}">
-          <img src="${found ? m.spotify.album_art : "https://placehold.co/64x64/262626/525252?text=%3F"}"
-            class="w-10 h-10 rounded object-cover flex-shrink-0" />
-          <div class="min-w-0 flex-1">
-            <p class="text-sm font-medium truncate">${m.vk.title}</p>
-            <p class="text-xs text-neutral-400 truncate">${m.vk.artist}</p>
-          </div>
-          <span class="text-xs font-semibold px-2.5 py-1 rounded-full ${
-            found
-              ? "bg-spotify/15 text-spotify"
-              : "bg-red-500/15 text-red-400"
-          }">
-            ${found ? "Matched" : "No match"}
-          </span>
-        </div>
-      `;
-    })
+// Russian plural forms: n % 10 == 1 && n % 100 != 11 -> one; 2-4 (not 12-14) -> few; else -> many
+function ruPlural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function renderImportSummary() {
+  const a = state.archive;
+  if (!a) {
+    el.importSummary.innerHTML = "";
+    return;
+  }
+
+  const playlistRows = a.playlists
+    .map(
+      (p) => `
+        <div class="flex items-center justify-between text-sm bg-neutral-800/50 rounded-lg px-3 py-2">
+          <span class="text-neutral-200">${p.name}</span>
+          <span class="text-neutral-500">${p.count} ${ruPlural(p.count, "трек", "трека", "треков")}</span>
+        </div>`
+    )
     .join("");
 
-  const foundCount = state.matches.filter((m) => m.spotify).length;
-  el.matchSummary.textContent = `${foundCount}/${state.matches.length} matched`;
+  el.importSummary.innerHTML = `
+    <div class="text-sm">
+      <span class="text-neutral-400">Будет добавлено:</span>
+      <span class="font-semibold text-neutral-100">${a.likedCount} ${ruPlural(a.likedCount, "любимый трек", "любимых трека", "любимых треков")}</span>
+      <span class="text-neutral-500">в Liked Songs</span>
+    </div>
+    <div class="text-sm mb-2">
+      <span class="font-semibold text-neutral-100">${a.playlists.length} ${ruPlural(a.playlists.length, "плейлист", "плейлиста", "плейлистов")}:</span>
+    </div>
+    <div class="space-y-1.5">${playlistRows}</div>
+  `;
 }
 
 function unlock(cardEl) {
@@ -151,39 +152,78 @@ function unlock(cardEl) {
 
 el.connectBtn.addEventListener("click", async () => {
   el.connectBtn.disabled = true;
-  el.connectBtn.textContent = "Connecting…";
+  el.connectBtn.textContent = "Подключение…";
 
   const user = await mockLogin();
   state.user = user;
   renderAuthArea();
 
-  el.connectBtn.textContent = "Connected";
-  unlock(el.tracksCard);
-
-  el.trackList.innerHTML = `<div class="px-4 py-6 text-sm text-neutral-400 text-center">Matching tracks…</div>`;
-  const matches = await mockSearchTracks(MOCK_VK_TRACKS);
-  state.matches = matches;
-  renderTrackList();
-  unlock(el.playlistCard);
+  el.connectBtn.textContent = "Подключено";
+  unlock(el.archiveCard);
 });
 
-el.createBtn.addEventListener("click", async () => {
-  el.createBtn.disabled = true;
+async function handleArchiveFile(file) {
+  if (!file) return;
+
+  el.parseStatus.classList.remove("hidden");
+  el.parseStatus.textContent = `Разбираем «${file.name}»…`;
+
+  const archive = await mockParseArchive(file);
+  state.archive = archive;
+
+  el.parseStatus.textContent = `Готово: найдено ${archive.likedCount} любимых треков и ${archive.playlists.length} плейлиста(ов).`;
+
+  renderImportSummary();
+  unlock(el.importCard);
+}
+
+el.dropzone.addEventListener("click", () => el.archiveInput.click());
+el.archiveInput.addEventListener("change", (e) => handleArchiveFile(e.target.files[0]));
+
+["dragover", "dragleave", "drop"].forEach((evt) => {
+  el.dropzone.addEventListener(evt, (e) => e.preventDefault());
+});
+el.dropzone.addEventListener("dragover", () => {
+  el.dropzone.classList.add("border-spotify", "bg-neutral-800/40");
+});
+el.dropzone.addEventListener("dragleave", () => {
+  el.dropzone.classList.remove("border-spotify", "bg-neutral-800/40");
+});
+el.dropzone.addEventListener("drop", (e) => {
+  el.dropzone.classList.remove("border-spotify", "bg-neutral-800/40");
+  handleArchiveFile(e.dataTransfer.files[0]);
+});
+
+el.importBtn.addEventListener("click", async () => {
+  el.importBtn.disabled = true;
   el.progressArea.classList.remove("hidden");
   el.resultArea.classList.add("hidden");
+  el.resultArea.innerHTML = "";
 
-  const name = el.playlistName.value.trim() || "VK Import";
-  const toAdd = state.matches.filter((m) => m.spotify).length;
-
-  const result = await mockCreatePlaylist(name, state.matches, (done, total) => {
-    const pct = total ? Math.round((done / total) * 100) : 100;
+  const result = await mockImport(state.archive, (done, total, label) => {
+    const pct = Math.round((done / total) * 100);
     el.progressBar.style.width = `${pct}%`;
-    el.progressLabel.textContent = `Adding tracks… ${done}/${total}`;
+    el.progressLabel.textContent = `Импортируем: ${label} (${done}/${total})`;
   });
 
-  el.progressLabel.textContent = `Done — added ${result.added} track${result.added === 1 ? "" : "s"}`;
-  el.resultSummary.textContent = `${result.added} added, ${result.skipped} skipped (no match) — "${result.playlistName}"`;
-  el.resultLink.href = result.url;
+  el.progressLabel.textContent = "Импорт завершён";
+
+  const playlistResultRows = result.playlists
+    .map(
+      (p) => `
+        <div class="flex items-center justify-between bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3">
+          <span class="text-sm">${p.name} — добавлено ${p.added} ${ruPlural(p.added, "трек", "трека", "треков")}</span>
+          <a href="${p.url}" target="_blank" class="text-spotify text-sm font-semibold hover:underline">Открыть →</a>
+        </div>`
+    )
+    .join("");
+
+  el.resultArea.innerHTML = `
+    <div class="bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3 text-sm">
+      Добавлено ${result.likedAdded} ${ruPlural(result.likedAdded, "трек", "трека", "треков")} в Liked Songs
+    </div>
+    ${playlistResultRows}
+  `;
   el.resultArea.classList.remove("hidden");
-  el.createBtn.disabled = false;
+  el.importBtn.disabled = false;
 });
