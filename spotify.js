@@ -26,7 +26,10 @@ async function spotifyFetch(accessToken, path, options = {}) {
     );
   }
   if (res.status === 204) return null;
-  return res.json();
+  // Some endpoints (e.g. PUT /me/library) return 200 with an empty body
+  // instead of 204, which res.json() can't parse ("unexpected end of data").
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 // Finds the best-guess Spotify track for an {artist, title} pair. Tries a
@@ -57,6 +60,13 @@ async function createPlaylist(accessToken, name) {
   const playlist = await spotifyFetch(accessToken, `/me/playlists`, {
     method: "POST",
     body: JSON.stringify({ name, public: false, description: "Импортировано из VK через Vk2Spotify" }),
+  });
+  // The `public: false` above is unreliable on its own — Spotify sometimes
+  // creates the playlist public regardless. A follow-up "change details"
+  // call reliably enforces it.
+  await spotifyFetch(accessToken, `/playlists/${playlist.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ public: false }),
   });
   return { id: playlist.id, url: playlist.external_urls.spotify };
 }
