@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VK → Spotify Importer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          spotify: "#1DB954",
+          vk: "#0077FF",
+        },
+      },
+    },
+  };
+</script>
+</head>
+<body class="bg-neutral-950 text-neutral-100 min-h-screen">
+
+<div class="max-w-3xl mx-auto px-4 py-10">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between mb-10">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">VK <span class="text-neutral-500">→</span> Spotify</h1>
+      <p class="text-neutral-400 text-sm mt-1">Import your VK saved audio into a Spotify playlist</p>
+    </div>
+    <div id="auth-area"></div>
+  </header>
+
+  <!-- Step 1: Connect -->
+  <section id="connect-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-lg">1. Connect to Spotify</h2>
+        <p class="text-neutral-400 text-sm mt-1">We need permission to create a playlist and add tracks.</p>
+      </div>
+      <button id="connect-btn"
+        class="flex items-center gap-2 bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full">
+        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-black"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.52 17.34c-.24.36-.66.48-1.02.24-2.82-1.68-6.3-2.1-10.44-1.14-.42.12-.78-.18-.9-.54-.12-.42.18-.78.54-.9 4.56-1.02 8.4-.6 11.52 1.32.42.18.48.66.3 1.02zm1.44-3.3c-.3.42-.84.6-1.26.3-3.24-1.98-8.16-2.58-11.94-1.38-.48.12-1.02-.12-1.14-.6-.12-.48.12-1.02.6-1.14 4.38-1.32 9.78-.66 13.5 1.56.36.24.54.84.24 1.26zm.12-3.42c-3.9-2.28-10.32-2.52-14.04-1.38-.6.18-1.2-.18-1.38-.72-.18-.6.18-1.2.72-1.38 4.26-1.32 11.28-1.02 15.72 1.62.54.3.72 1.02.42 1.56-.3.48-1.02.66-1.44.3z"/></svg>
+        Connect Spotify
+      </button>
+    </div>
+  </section>
+
+  <!-- Step 2: Track list -->
+  <section id="tracks-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6 opacity-40 pointer-events-none transition-opacity">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="font-semibold text-lg">2. Review matches</h2>
+        <p class="text-neutral-400 text-sm mt-1">Tracks found in your VK export, matched against Spotify.</p>
+      </div>
+      <span id="match-summary" class="text-sm text-neutral-400"></span>
+    </div>
+
+    <div class="divide-y divide-neutral-800 rounded-lg overflow-hidden border border-neutral-800">
+      <div id="track-list"></div>
+    </div>
+  </section>
+
+  <!-- Step 3: Create playlist -->
+  <section id="playlist-card" class="bg-neutral-900 border border-neutral-800 rounded-xl p-6 opacity-40 pointer-events-none transition-opacity">
+    <h2 class="font-semibold text-lg mb-4">3. Create playlist</h2>
+    <div class="flex flex-col sm:flex-row gap-3">
+      <input id="playlist-name" type="text" value="VK Import"
+        class="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-spotify" />
+      <button id="create-playlist-btn"
+        class="bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full whitespace-nowrap">
+        Create playlist
+      </button>
+    </div>
+
+    <div id="progress-area" class="mt-5 hidden">
+      <div class="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
+        <div id="progress-bar" class="bg-spotify h-2 rounded-full transition-all" style="width:0%"></div>
+      </div>
+      <p id="progress-label" class="text-sm text-neutral-400 mt-2"></p>
+    </div>
+
+    <div id="result-area" class="mt-5 hidden">
+      <div class="bg-neutral-800/60 border border-neutral-700 rounded-lg p-4 flex items-center justify-between">
+        <div>
+          <p class="font-medium">Playlist created</p>
+          <p id="result-summary" class="text-sm text-neutral-400"></p>
+        </div>
+        <a id="result-link" href="#" target="_blank"
+          class="text-spotify text-sm font-semibold hover:underline">Open in Spotify →</a>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
