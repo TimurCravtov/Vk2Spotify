@@ -288,16 +288,24 @@ function renderImportSummary() {
     : "";
 
   const playlistRows = a.playlists
-    .map(
-      (p, i) => `
+    .map((p, i) => {
+      const thumb = p.image
+        ? `<img src="${p.image}" onerror="this.style.visibility='hidden'"
+            class="w-8 h-8 rounded object-cover bg-neutral-700 flex-shrink-0" />`
+        : `<div class="w-8 h-8 rounded bg-neutral-800 flex-shrink-0 flex items-center justify-center text-neutral-600">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                d="M9 18V5l12-2v13M9 18a3 3 0 11-6 0 3 3 0 016 0zm12-2a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>`;
+      return `
         <label class="flex items-center gap-3 text-sm border border-neutral-800 rounded-lg px-3 py-2 cursor-pointer hover:border-neutral-700 transition">
           <input type="checkbox" class="playlist-toggle accent-spotify w-4 h-4 flex-shrink-0" data-index="${i}" ${cfg.playlistSelected[i] ? "checked" : ""} />
-          <img src="${p.image}" onerror="this.style.visibility='hidden'"
-            class="w-8 h-8 rounded object-cover bg-neutral-700 flex-shrink-0" />
+          ${thumb}
           <span class="text-neutral-200 flex-1 truncate">${p.name}</span>
           <span class="text-neutral-500">${p.tracks.length} ${ruPlural(p.tracks.length, "трек", "трека", "треков")}</span>
-        </label>`
-    )
+        </label>`;
+    })
     .join("");
 
   el.importSummary.innerHTML = `
@@ -520,11 +528,28 @@ async function handleArchiveFile(file) {
   if (!file) return;
 
   el.parseStatus.classList.remove("hidden");
+  el.parseStatus.classList.remove("text-red-400");
   el.parseStatus.textContent = `Разбираем «${file.name}»…`;
+  lock(el.importCard);
 
-  const archive = await window.VkImport.extractVkArchive(file);
+  let archive;
+  try {
+    archive = await window.VkImport.extractVkArchive(file);
+  } catch (err) {
+    el.parseStatus.classList.add("text-red-400");
+    el.parseStatus.textContent = "Ошибка разбора архива: " + err.message;
+    el.archiveInput.value = "";
+    return;
+  }
+
   state.archive = archive;
   state.importConfig = createDefaultImportConfig(archive);
+
+  if (!archive.liked.length && !archive.playlists.length) {
+    el.parseStatus.classList.add("text-red-400");
+    el.parseStatus.textContent = "В архиве не найдено ни одного трека.";
+    return;
+  }
 
   el.parseStatus.textContent = `Готово: найдено ${archive.liked.length} любимых треков и ${archive.playlists.length} плейлиста(ов).`;
 
