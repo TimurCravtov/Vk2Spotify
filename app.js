@@ -112,37 +112,45 @@ async function fetchSpotifyProfile(accessToken) {
 }
 
 // ---------------------------------------------------------------------------
-// MOCK API LAYER (Spotify import step — still mocked)
-// Archive parsing itself now lives in import.js (window.VkImport).
+// IMPORT — actually creates the selected destinations on Spotify.
+// Archive parsing (import.js) is still mocked; this part is real.
 // ---------------------------------------------------------------------------
 
-// Simulates creating each selected destination (Liked Songs and/or new
-// playlists) on Spotify, reporting progress per item.
-function mockImport(items, onProgress) {
-  let done = 0;
+// For each selected destination: searches Spotify for every track, then
+// either saves matches to Liked Songs or creates a playlist and adds them.
+// onProgress(done, total, label) fires once per track as it's searched.
+async function runImport(items, onProgress) {
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) throw new Error("Сессия истекла, подключите Spotify заново");
+
+  const totalTracks = items.reduce((sum, item) => sum + item.tracks.length, 0);
+  let searched = 0;
   const results = [];
 
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      const item = items[done];
-      results.push({
-        label: item.label,
-        added: item.tracks.length,
-        isLikedSongs: item.isLikedSongs,
-        url: item.isLikedSongs
-          ? null
-          : "https://open.spotify.com/playlist/mock_" + item.label.toLowerCase().replace(/\s+/g, "_"),
-      });
+  for (const item of items) {
+    const found = [];
+    let notFound = 0;
 
-      done += 1;
-      onProgress(done, items.length, `${item.label} (${item.tracks.length})`);
+    for (const t of item.tracks) {
+      const match = await window.SpotifyApi.searchTrack(accessToken, t);
+      if (match) found.push(match);
+      else notFound += 1;
 
-      if (done >= items.length) {
-        clearInterval(interval);
-        resolve(results);
-      }
-    }, 600);
-  });
+      searched += 1;
+      onProgress(searched, totalTracks, `${t.artist} — ${t.title}`);
+    }
+
+    if (item.isLikedSongs) {
+      if (found.length) await window.SpotifyApi.saveTracksToLibrary(accessToken, found.map((f) => f.uri));
+      results.push({ label: item.label, added: found.length, notFound, url: null });
+    } else {
+      const playlist = await window.SpotifyApi.createPlaylist(accessToken, item.label);
+      if (found.length) await window.SpotifyApi.addTracksToPlaylist(accessToken, playlist.id, found.map((f) => f.uri));
+      results.push({ label: item.label, added: found.length, notFound, url: playlist.url });
+    }
+  }
+
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,13 +193,19 @@ function renderAuthArea() {
     return;
   }
   el.authArea.innerHTML = `
-    <div class="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-full pl-1 pr-4 py-1">
+    <div class="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-full pl-1 pr-1.5 py-1">
       <img src="${state.user.avatar}" onerror="this.style.display='none'"
         class="w-7 h-7 rounded-full bg-neutral-700" />
       <span class="text-sm font-medium">${state.user.display_name}</span>
+      <button id="disconnect-btn" type="button" title="Отключить Spotify"
+        class="text-xs text-neutral-500 hover:text-red-400 hover:bg-neutral-800 transition px-2 py-1 rounded-full">Отключить</button>
     </div>
   `;
 }
+
+el.authArea.addEventListener("click", (e) => {
+  if (e.target.id === "disconnect-btn") disconnectSpotify();
+});
 
 // Russian plural forms: n % 10 == 1 && n % 100 != 11 -> one; 2-4 (not 12-14) -> few; else -> many
 function ruPlural(n, one, few, many) {
@@ -289,13 +303,35 @@ function renderImportSummary() {
   el.importSummary.innerHTML = `
     ${likedRow}
     <div>
-      <p class="text-sm text-neutral-400 mb-2">Плейлисты — выберите, какие импортировать:</p>
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-sm text-neutral-400">Плейлисты — выберите, какие импортировать:</p>
+        ${
+          a.playlists.length > 1
+            ? `<div class="flex items-center gap-2 text-xs">
+                <button type="button" id="select-all-playlists" class="text-neutral-500 hover:text-neutral-300 underline">Выбрать все</button>
+                <span class="text-neutral-700">·</span>
+                <button type="button" id="deselect-all-playlists" class="text-neutral-500 hover:text-neutral-300 underline">Снять все</button>
+              </div>`
+            : ""
+        }
+      </div>
       <div class="space-y-1.5">${playlistRows}</div>
     </div>
   `;
 
   updateImportButtonState();
 }
+
+el.importSummary.addEventListener("click", (e) => {
+  const cfg = state.importConfig;
+  if (!cfg) return;
+
+  if (e.target.id === "select-all-playlists" || e.target.id === "deselect-all-playlists") {
+    const selectAll = e.target.id === "select-all-playlists";
+    cfg.playlistSelected = cfg.playlistSelected.map(() => selectAll);
+    renderImportSummary();
+  }
+});
 
 el.importSummary.addEventListener("change", (e) => {
   const cfg = state.importConfig;
@@ -324,6 +360,38 @@ el.importSummary.addEventListener("input", (e) => {
 
 function unlock(cardEl) {
   cardEl.classList.remove("opacity-40", "pointer-events-none");
+}
+function lock(cardEl) {
+  cardEl.classList.add("opacity-40", "pointer-events-none");
+}
+
+// Clears the local session only — does not revoke the grant on Spotify's
+// side (the Web API has no revoke endpoint; that's done from the user's
+// Spotify account settings).
+function disconnectSpotify() {
+  sessionStorage.removeItem("spotify_access_token");
+  sessionStorage.removeItem("spotify_expires_at");
+  sessionStorage.removeItem("spotify_refresh_token");
+  sessionStorage.removeItem("spotify_code_verifier");
+  sessionStorage.removeItem("spotify_auth_state");
+
+  state.user = null;
+  state.archive = null;
+  state.importConfig = null;
+
+  renderAuthArea();
+  resetConnectButton();
+  lock(el.archiveCard);
+  lock(el.importCard);
+
+  el.archiveInput.value = "";
+  el.parseStatus.classList.add("hidden");
+  el.parseStatus.textContent = "";
+  el.importSummary.innerHTML = "";
+  el.progressArea.classList.add("hidden");
+  el.progressBar.style.width = "0%";
+  el.resultArea.classList.add("hidden");
+  el.resultArea.innerHTML = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +468,9 @@ async function initAuth() {
     try {
       el.connectBtn.disabled = true;
       el.connectBtn.textContent = "Подключение…";
-      storeTokens(await exchangeCodeForToken(code));
+      const tokenResponse = await exchangeCodeForToken(code);
+      console.log("Spotify granted scopes:", tokenResponse.scope);
+      storeTokens(tokenResponse);
       await loadProfileAndUnlock();
     } catch (err) {
       showAuthError("Не удалось подключить Spotify: " + err.message);
@@ -487,25 +557,34 @@ el.importBtn.addEventListener("click", async () => {
   el.progressArea.classList.remove("hidden");
   el.resultArea.classList.add("hidden");
   el.resultArea.innerHTML = "";
+  el.progressBar.style.width = "0%";
 
-  const results = await mockImport(items, (done, total, label) => {
-    const pct = Math.round((done / total) * 100);
-    el.progressBar.style.width = `${pct}%`;
-    el.progressLabel.textContent = `Импортируем: ${label} (${done}/${total})`;
-  });
+  try {
+    const results = await runImport(items, (done, total, label) => {
+      const pct = Math.round((done / total) * 100);
+      el.progressBar.style.width = `${pct}%`;
+      el.progressLabel.textContent = `Ищем: ${label} (${done}/${total})`;
+    });
 
-  el.progressLabel.textContent = "Импорт завершён";
+    el.progressLabel.textContent = "Импорт завершён";
 
-  el.resultArea.innerHTML = results
-    .map(
-      (r) => `
-        <div class="flex items-center justify-between bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3">
-          <span class="text-sm">${r.label} — добавлено ${r.added} ${ruPlural(r.added, "трек", "трека", "треков")}</span>
-          ${r.url ? `<a href="${r.url}" target="_blank" class="text-spotify text-sm font-semibold hover:underline">Открыть →</a>` : ""}
-        </div>`
-    )
-    .join("");
+    el.resultArea.innerHTML = results
+      .map(
+        (r) => `
+          <div class="flex items-center justify-between bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3">
+            <span class="text-sm">
+              ${r.label} — добавлено ${r.added} ${ruPlural(r.added, "трек", "трека", "треков")}${
+          r.notFound ? `, не найдено ${r.notFound}` : ""
+        }
+            </span>
+            ${r.url ? `<a href="${r.url}" target="_blank" class="text-spotify text-sm font-semibold hover:underline">Открыть →</a>` : ""}
+          </div>`
+      )
+      .join("");
+    el.resultArea.classList.remove("hidden");
+  } catch (err) {
+    el.progressLabel.textContent = "Ошибка импорта: " + err.message;
+  }
 
-  el.resultArea.classList.remove("hidden");
   updateImportButtonState();
 });
