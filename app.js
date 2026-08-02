@@ -112,53 +112,32 @@ async function fetchSpotifyProfile(accessToken) {
 }
 
 // ---------------------------------------------------------------------------
-// MOCK DATA & MOCK API LAYER (archive parsing + import — still mocked)
+// MOCK API LAYER (Spotify import step — still mocked)
+// Archive parsing itself now lives in import.js (window.VkImport).
 // ---------------------------------------------------------------------------
 
-// Stand-in for what parsing the VK archive would produce: liked audio +
-// audio playlists, each with a track count.
-const MOCK_ARCHIVE_RESULT = {
-  likedCount: 128,
-  playlists: [
-    { name: "Chill", count: 24 },
-    { name: "Rap", count: 57 },
-    { name: "Road trip", count: 12 },
-  ],
-};
-
-// Simulates reading + parsing the uploaded VK archive file.
-function mockParseArchive(file) {
-  return new Promise((resolve) => setTimeout(() => resolve(MOCK_ARCHIVE_RESULT), 1100));
-}
-
-// Simulates creating the Liked Songs additions + each playlist on Spotify,
-// reporting progress per "stage" (liked songs bucket, then each playlist).
-function mockImport(archive, onProgress) {
-  const stages = [
-    { type: "liked", label: `Liked Songs (${archive.likedCount})` },
-    ...archive.playlists.map((p) => ({ type: "playlist", label: `${p.name} (${p.count})`, playlist: p })),
-  ];
-
+// Simulates creating each selected destination (Liked Songs and/or new
+// playlists) on Spotify, reporting progress per item.
+function mockImport(items, onProgress) {
   let done = 0;
-  const results = { likedAdded: 0, playlists: [] };
+  const results = [];
 
   return new Promise((resolve) => {
     const interval = setInterval(() => {
-      const stage = stages[done];
-      if (stage.type === "liked") {
-        results.likedAdded = archive.likedCount;
-      } else {
-        results.playlists.push({
-          name: stage.playlist.name,
-          added: stage.playlist.count,
-          url: "https://open.spotify.com/playlist/mock_" + stage.playlist.name.toLowerCase().replace(/\s+/g, "_"),
-        });
-      }
+      const item = items[done];
+      results.push({
+        label: item.label,
+        added: item.tracks.length,
+        isLikedSongs: item.isLikedSongs,
+        url: item.isLikedSongs
+          ? null
+          : "https://open.spotify.com/playlist/mock_" + item.label.toLowerCase().replace(/\s+/g, "_"),
+      });
 
       done += 1;
-      onProgress(done, stages.length, stage.label);
+      onProgress(done, items.length, `${item.label} (${item.tracks.length})`);
 
-      if (done >= stages.length) {
+      if (done >= items.length) {
         clearInterval(interval);
         resolve(results);
       }
@@ -173,6 +152,7 @@ function mockImport(archive, onProgress) {
 const state = {
   user: null,
   archive: null,
+  importConfig: null, // { likedEnabled, likedDestination: 'liked'|'playlist', likedPlaylistName, playlistSelected: bool[] }
 };
 
 const el = {
@@ -192,6 +172,7 @@ const el = {
   importCard: document.getElementById("import-card"),
   importSummary: document.getElementById("import-summary"),
   importBtn: document.getElementById("import-btn"),
+  importValidation: document.getElementById("import-validation"),
   progressArea: document.getElementById("progress-area"),
   progressBar: document.getElementById("progress-bar"),
   progressLabel: document.getElementById("progress-label"),
@@ -221,35 +202,125 @@ function ruPlural(n, one, few, many) {
   return many;
 }
 
+function createDefaultImportConfig(archive) {
+  return {
+    likedEnabled: archive.liked.length > 0,
+    likedDestination: "liked", // 'liked' | 'playlist'
+    likedPlaylistName: "Liked from VK",
+    playlistSelected: archive.playlists.map(() => true),
+  };
+}
+
+// What would actually get sent to Spotify given the current selection: one
+// entry per destination (Liked Songs and/or new playlists), each carrying
+// the tracks that belong to it.
+function buildImportPlan() {
+  const a = state.archive;
+  const cfg = state.importConfig;
+  const items = [];
+
+  if (cfg.likedEnabled) {
+    items.push({
+      tracks: a.liked,
+      isLikedSongs: cfg.likedDestination === "liked",
+      label:
+        cfg.likedDestination === "liked" ? "Liked Songs" : cfg.likedPlaylistName.trim() || "Liked from VK",
+    });
+  }
+
+  a.playlists.forEach((p, i) => {
+    if (cfg.playlistSelected[i]) {
+      items.push({ tracks: p.tracks, isLikedSongs: false, label: p.name });
+    }
+  });
+
+  return items;
+}
+
+function updateImportButtonState() {
+  const cfg = state.importConfig;
+  if (!cfg) return;
+  const anySelected = cfg.likedEnabled || cfg.playlistSelected.some(Boolean);
+  el.importBtn.disabled = !anySelected;
+  el.importValidation.classList.toggle("hidden", anySelected);
+}
+
 function renderImportSummary() {
   const a = state.archive;
-  if (!a) {
+  const cfg = state.importConfig;
+  if (!a || !cfg) {
     el.importSummary.innerHTML = "";
     return;
   }
 
+  const likedRow = a.liked.length
+    ? `
+    <div class="border border-neutral-800 rounded-lg p-3">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="liked-enabled" class="accent-spotify w-4 h-4" ${cfg.likedEnabled ? "checked" : ""} />
+        <span class="text-sm font-medium">${a.liked.length} ${ruPlural(a.liked.length, "любимый трек", "любимых трека", "любимых треков")}</span>
+      </label>
+      <div id="liked-destination-row" class="mt-2 pl-6 flex items-center gap-2 text-sm ${cfg.likedEnabled ? "" : "opacity-40 pointer-events-none"}">
+        <span class="text-neutral-400">Добавить в:</span>
+        <select id="liked-destination"
+          class="bg-neutral-800 border border-neutral-700 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-spotify">
+          <option value="liked" ${cfg.likedDestination === "liked" ? "selected" : ""}>Liked Songs</option>
+          <option value="playlist" ${cfg.likedDestination === "playlist" ? "selected" : ""}>Новый плейлист</option>
+        </select>
+        <input id="liked-playlist-name" type="text" value="${cfg.likedPlaylistName}" placeholder="Название плейлиста"
+          class="flex-1 bg-neutral-800 border border-neutral-700 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-spotify ${cfg.likedDestination === "playlist" ? "" : "hidden"}" />
+      </div>
+    </div>`
+    : "";
+
   const playlistRows = a.playlists
     .map(
-      (p) => `
-        <div class="flex items-center justify-between text-sm bg-neutral-800/50 rounded-lg px-3 py-2">
-          <span class="text-neutral-200">${p.name}</span>
-          <span class="text-neutral-500">${p.count} ${ruPlural(p.count, "трек", "трека", "треков")}</span>
-        </div>`
+      (p, i) => `
+        <label class="flex items-center gap-3 text-sm border border-neutral-800 rounded-lg px-3 py-2 cursor-pointer hover:border-neutral-700 transition">
+          <input type="checkbox" class="playlist-toggle accent-spotify w-4 h-4 flex-shrink-0" data-index="${i}" ${cfg.playlistSelected[i] ? "checked" : ""} />
+          <img src="${p.image}" onerror="this.style.visibility='hidden'"
+            class="w-8 h-8 rounded object-cover bg-neutral-700 flex-shrink-0" />
+          <span class="text-neutral-200 flex-1 truncate">${p.name}</span>
+          <span class="text-neutral-500">${p.tracks.length} ${ruPlural(p.tracks.length, "трек", "трека", "треков")}</span>
+        </label>`
     )
     .join("");
 
   el.importSummary.innerHTML = `
-    <div class="text-sm">
-      <span class="text-neutral-400">Будет добавлено:</span>
-      <span class="font-semibold text-neutral-100">${a.likedCount} ${ruPlural(a.likedCount, "любимый трек", "любимых трека", "любимых треков")}</span>
-      <span class="text-neutral-500">в Liked Songs</span>
+    ${likedRow}
+    <div>
+      <p class="text-sm text-neutral-400 mb-2">Плейлисты — выберите, какие импортировать:</p>
+      <div class="space-y-1.5">${playlistRows}</div>
     </div>
-    <div class="text-sm mb-2">
-      <span class="font-semibold text-neutral-100">${a.playlists.length} ${ruPlural(a.playlists.length, "плейлист", "плейлиста", "плейлистов")}:</span>
-    </div>
-    <div class="space-y-1.5">${playlistRows}</div>
   `;
+
+  updateImportButtonState();
 }
+
+el.importSummary.addEventListener("change", (e) => {
+  const cfg = state.importConfig;
+  if (!cfg) return;
+
+  if (e.target.id === "liked-enabled") {
+    cfg.likedEnabled = e.target.checked;
+    const row = document.getElementById("liked-destination-row");
+    row.classList.toggle("opacity-40", !cfg.likedEnabled);
+    row.classList.toggle("pointer-events-none", !cfg.likedEnabled);
+  } else if (e.target.id === "liked-destination") {
+    cfg.likedDestination = e.target.value;
+    document.getElementById("liked-playlist-name").classList.toggle("hidden", cfg.likedDestination !== "playlist");
+  } else if (e.target.classList.contains("playlist-toggle")) {
+    cfg.playlistSelected[Number(e.target.dataset.index)] = e.target.checked;
+  }
+
+  updateImportButtonState();
+});
+
+el.importSummary.addEventListener("input", (e) => {
+  if (e.target.id === "liked-playlist-name" && state.importConfig) {
+    state.importConfig.likedPlaylistName = e.target.value;
+  }
+});
 
 function unlock(cardEl) {
   cardEl.classList.remove("opacity-40", "pointer-events-none");
@@ -381,10 +452,11 @@ async function handleArchiveFile(file) {
   el.parseStatus.classList.remove("hidden");
   el.parseStatus.textContent = `Разбираем «${file.name}»…`;
 
-  const archive = await mockParseArchive(file);
+  const archive = await window.VkImport.extractVkArchive(file);
   state.archive = archive;
+  state.importConfig = createDefaultImportConfig(archive);
 
-  el.parseStatus.textContent = `Готово: найдено ${archive.likedCount} любимых треков и ${archive.playlists.length} плейлиста(ов).`;
+  el.parseStatus.textContent = `Готово: найдено ${archive.liked.length} любимых треков и ${archive.playlists.length} плейлиста(ов).`;
 
   renderImportSummary();
   unlock(el.importCard);
@@ -408,12 +480,15 @@ el.dropzone.addEventListener("drop", (e) => {
 });
 
 el.importBtn.addEventListener("click", async () => {
+  const items = buildImportPlan();
+  if (!items.length) return;
+
   el.importBtn.disabled = true;
   el.progressArea.classList.remove("hidden");
   el.resultArea.classList.add("hidden");
   el.resultArea.innerHTML = "";
 
-  const result = await mockImport(state.archive, (done, total, label) => {
+  const results = await mockImport(items, (done, total, label) => {
     const pct = Math.round((done / total) * 100);
     el.progressBar.style.width = `${pct}%`;
     el.progressLabel.textContent = `Импортируем: ${label} (${done}/${total})`;
@@ -421,22 +496,16 @@ el.importBtn.addEventListener("click", async () => {
 
   el.progressLabel.textContent = "Импорт завершён";
 
-  const playlistResultRows = result.playlists
+  el.resultArea.innerHTML = results
     .map(
-      (p) => `
+      (r) => `
         <div class="flex items-center justify-between bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3">
-          <span class="text-sm">${p.name} — добавлено ${p.added} ${ruPlural(p.added, "трек", "трека", "треков")}</span>
-          <a href="${p.url}" target="_blank" class="text-spotify text-sm font-semibold hover:underline">Открыть →</a>
+          <span class="text-sm">${r.label} — добавлено ${r.added} ${ruPlural(r.added, "трек", "трека", "треков")}</span>
+          ${r.url ? `<a href="${r.url}" target="_blank" class="text-spotify text-sm font-semibold hover:underline">Открыть →</a>` : ""}
         </div>`
     )
     .join("");
 
-  el.resultArea.innerHTML = `
-    <div class="bg-neutral-800/60 border border-neutral-700 rounded-lg px-4 py-3 text-sm">
-      Добавлено ${result.likedAdded} ${ruPlural(result.likedAdded, "трек", "трека", "треков")} в Liked Songs
-    </div>
-    ${playlistResultRows}
-  `;
   el.resultArea.classList.remove("hidden");
-  el.importBtn.disabled = false;
+  updateImportButtonState();
 });

@@ -116,9 +116,10 @@
     <div id="import-summary" class="space-y-3 mb-5"></div>
 
     <button id="import-btn"
-      class="bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full">
+      class="bg-spotify hover:bg-green-500 transition text-black font-semibold px-5 py-2.5 rounded-full disabled:opacity-50">
       Начать импорт
     </button>
+    <p id="import-validation" class="text-xs text-red-400 mt-2 hidden">Выберите хотя бы одно назначение для импорта.</p>
 
     <div id="progress-area" class="mt-5 hidden">
       <div class="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
@@ -152,6 +153,7 @@
   </div>
 </footer>
 
+<script src="import.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
